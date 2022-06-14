@@ -22,6 +22,103 @@ use postgres_ffi::{pg_constants, ControlFileData, DBState_DB_SHUTDOWNED};
 use postgres_ffi::{Oid, TransactionId};
 use utils::lsn::Lsn;
 
+/// Read files in a particular order, one after another (without skipping back)
+pub trait FileReader<R: Read>: Sized {
+    fn path(&self) -> PathBuf;
+    fn len(&self) -> usize;
+    fn reader<'a>(&'a mut self) -> &'a mut R;
+    fn next_file(self) -> Option<Self>;
+}
+
+/// Read files from local directory
+pub struct LocalDirStream {
+    walker: walkdir::IntoIter,
+    path: PathBuf,
+    len: usize,
+    reader: File,
+}
+
+impl LocalDirStream {
+    fn new() -> Option<Self> {
+        todo!()
+    }
+}
+
+impl FileReader<File> for LocalDirStream {
+    fn path(&self) -> PathBuf {
+        self.path.clone()
+    }
+
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    fn reader<'a>(&'a mut self) -> &'a mut File {
+        &mut self.reader
+    }
+
+    fn next_file(self) -> Option<Self> {
+        let mut me = self;
+        match me.walker.next() {
+            Some(Ok(entry)) => Some(LocalDirStream {
+                walker: me.walker,
+                path: entry.path().to_owned(),
+                len: entry.metadata().unwrap().len() as usize,
+                reader: File::open(entry.path()).unwrap(),
+            }),
+            Some(Err(e)) => todo!(),
+            None => None,
+        }
+    }
+}
+
+/// Read files from tar archive stream
+pub struct TarStream<'a, R: Read> {
+    walker: tar::Entries<'a, R>,
+    path: PathBuf,
+    len: usize,
+    reader: tar::Entry<'a, R>,
+}
+
+impl<'a, R: Read> TarStream<'a, R> {
+    fn new() -> Option<Self> {
+        todo!()
+    }
+}
+
+impl<'a, R: Read> FileReader<tar::Entry<'a, R>> for TarStream<'a, R> {
+    fn path(&self) -> PathBuf {
+        self.path.clone()
+    }
+
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    fn reader<'b>(&'b mut self) -> &'b mut tar::Entry<'a, R> {
+        &mut self.reader
+    }
+
+    fn next_file(self) -> Option<Self> {
+        let mut me = self;
+        match me.walker.next() {
+            Some(Ok(entry)) => {
+                let header = entry.header();
+                let path = header.path().unwrap().into_owned();
+                let len = header.entry_size().unwrap() as usize;
+                Some(TarStream {
+                    walker: me.walker,
+                    path,
+                    len,
+                    reader: entry,
+                })
+            },
+            Some(Err(e)) => todo!(),
+            None => None,
+        }
+    }
+}
+
 ///
 /// Import all relation data pages from local disk into the repository.
 ///
@@ -441,48 +538,30 @@ fn import_wal<R: Repository>(
     Ok(())
 }
 
-pub fn import_basebackup_from_tar<R: Repository, Reader: Read>(
+pub fn import_basebackup<R: Repository, Re: Read, Reader: FileReader<Re>>(
     tline: &mut DatadirTimeline<R>,
-    reader: Reader,
+    mut reader: Option<Reader>,
     base_lsn: Lsn,
 ) -> Result<()> {
     info!("importing base at {}", base_lsn);
     let mut modification = tline.begin_modification(base_lsn);
     modification.init_empty()?;
 
-    // Import base
-    for base_tar_entry in tar::Archive::new(reader).entries()? {
-        let entry = base_tar_entry.unwrap();
-        let header = entry.header();
-        let len = header.entry_size()? as usize;
-        let file_path = header.path().unwrap().into_owned();
+    while let Some(mut rea) = reader {
+        let path = rea.path();
+        let len = rea.len();
+        import_file(&mut modification, &path, rea.reader(), len)?;
 
-        match header.entry_type() {
-            tar::EntryType::Regular => {
-                // let mut buffer = Vec::new();
-                // entry.read_to_end(&mut buffer).unwrap();
-
-                import_file(&mut modification, file_path.as_ref(), entry, len)?;
-            }
-            tar::EntryType::Directory => {
-                info!("directory {:?}", file_path);
-                if file_path.starts_with("pg_wal") {
-                    info!("found pg_wal in base lol");
-                }
-            }
-            _ => {
-                panic!("tar::EntryType::?? {}", file_path.display());
-            }
-        }
+        reader = rea.next_file();
     }
 
     modification.commit()?;
     Ok(())
 }
 
-pub fn import_wal_from_tar<R: Repository, Reader: Read>(
+pub fn import_wal_g<R: Repository, Re: Read, Reader: FileReader<Re>>(
     tline: &mut DatadirTimeline<R>,
-    reader: Reader,
+    mut reader: Option<Reader>,
     start_lsn: Lsn,
     end_lsn: Lsn,
 ) -> Result<()> {
@@ -495,31 +574,23 @@ pub fn import_wal_from_tar<R: Repository, Reader: Read>(
 
     // Ingest wal until end_lsn
     info!("importing wal until {}", end_lsn);
-    let mut pg_wal_tar = tar::Archive::new(reader);
-    let mut pg_wal_entries_iter = pg_wal_tar.entries()?;
     while last_lsn <= end_lsn {
         let bytes = {
-            let entry = pg_wal_entries_iter.next().expect("expected more wal")?;
-            let header = entry.header();
-            let file_path = header.path().unwrap().into_owned();
+            if let Some(mut rea) = reader {
+                // FIXME: assume postgresql tli 1 for now
+                let expected_filename = XLogFileName(1, segno, pg_constants::WAL_SEGMENT_SIZE);
+                let path = rea.path();
+                let file_name = path.file_name().unwrap().to_string_lossy();
+                ensure!(expected_filename == file_name);
 
-            match header.entry_type() {
-                tar::EntryType::Regular => {
-                    // FIXME: assume postgresql tli 1 for now
-                    let expected_filename = XLogFileName(1, segno, pg_constants::WAL_SEGMENT_SIZE);
-                    let file_name = file_path.file_name().unwrap().to_string_lossy();
-                    ensure!(expected_filename == file_name);
+                info!("processing wal file {:?}", path);
+                let mut re = rea.reader();
+                let bytes = read_all_bytes(&mut re)?;
 
-                    info!("processing wal file {:?}", file_path);
-                    read_all_bytes(entry)?
-                }
-                tar::EntryType::Directory => {
-                    info!("directory {:?}", file_path);
-                    continue;
-                }
-                _ => {
-                    panic!("tar::EntryType::?? {}", file_path.display());
-                }
+                reader = rea.next_file();
+                bytes
+            } else {
+                bail!("expected more wal");
             }
         };
 
@@ -545,21 +616,42 @@ pub fn import_wal_from_tar<R: Repository, Reader: Read>(
         info!("there was no WAL to import at {}", last_lsn);
     }
 
-    // Log any extra unused files
-    for e in &mut pg_wal_entries_iter {
-        let entry = e.unwrap();
-        let header = entry.header();
-        let file_path = header.path().unwrap().into_owned();
-        info!("skipping {:?}", file_path);
+    loop {
+        match reader {
+            Some(rea) => {
+                info!("skipping {:?}", rea.path());
+                reader = rea.next_file();
+            },
+            None => break,
+        }
     }
 
     Ok(())
 }
 
+pub fn import_basebackup_from_tar<R: Repository, Reader: Read>(
+    tline: &mut DatadirTimeline<R>,
+    reader: Reader,
+    base_lsn: Lsn,
+) -> Result<()> {
+    let r = TarStream::<Reader>::new();
+    import_basebackup(tline, r, base_lsn)
+}
+
+pub fn import_wal_from_tar<R: Repository, Reader: Read>(
+    tline: &mut DatadirTimeline<R>,
+    reader: Reader,
+    start_lsn: Lsn,
+    end_lsn: Lsn,
+) -> Result<()> {
+    let r = TarStream::<Reader>::new();
+    import_wal_g(tline, r, start_lsn, end_lsn)
+}
+
 pub fn import_file<R: Repository, Reader: Read>(
     modification: &mut DatadirModification<R>,
     file_path: &Path,
-    reader: Reader,
+    reader: &mut Reader,
     len: usize,
 ) -> Result<Option<ControlFileData>> {
     info!("looking at {:?}", file_path);
