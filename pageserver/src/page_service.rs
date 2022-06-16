@@ -478,6 +478,8 @@ impl PageServerHandler {
             // wait until it arrives.
             let last_record_lsn = timeline.get_last_record_lsn();
 
+            info!("waiting for lsn, last_record: {last_record_lsn}, lsn: {lsn}");
+
             // Note: this covers the special case that lsn == Lsn(0). That
             // special case means "return the latest version whatever it is",
             // and it's used for bootstrapping purposes, when the page server is
@@ -596,7 +598,10 @@ impl PageServerHandler {
         */
         let page = timeline.get_rel_page_at_lsn(req.rel, req.blkno, lsn)?;
 
-        info!("finished processing the get_page_at_lsn request, took: {}us", timer.elapsed().as_micros());
+        info!(
+            "finished processing the get_page_at_lsn request, took: {}us",
+            timer.elapsed().as_micros()
+        );
 
         Ok(PagestreamBeMessage::GetPage(PagestreamGetPageResponse {
             page,
