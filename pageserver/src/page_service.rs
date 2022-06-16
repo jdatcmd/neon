@@ -374,8 +374,6 @@ impl PageServerHandler {
         //       so there is no need to reset the association
         thread_mgr::associate_with(Some(tenantid), Some(timelineid));
 
-        info!("handle page requests is called...");
-
         // Check that the timeline exists
         let timeline = tenant_mgr::get_local_timeline_with_load(tenantid, timelineid)
             .context("Cannot load local timeline")?;
@@ -444,12 +442,8 @@ impl PageServerHandler {
                     }
                 }
             }
-
             drop(profiling_guard);
         }
-
-        info!("finished handle page requests...");
-
         Ok(())
     }
 
@@ -477,8 +471,6 @@ impl PageServerHandler {
             // page after that LSN. If we haven't received WAL up to that point,
             // wait until it arrives.
             let last_record_lsn = timeline.get_last_record_lsn();
-
-            info!("waiting for lsn, last_record: {last_record_lsn}, lsn: {lsn}");
 
             // Note: this covers the special case that lsn == Lsn(0). That
             // special case means "return the latest version whatever it is",
@@ -581,13 +573,8 @@ impl PageServerHandler {
     ) -> Result<PagestreamBeMessage> {
         let _enter = info_span!("get_page", rel = %req.rel, blkno = &req.blkno, req_lsn = %req.lsn)
             .entered();
-
-        info!("got get_page_at_lsn request...");
-        let timer = std::time::Instant::now();
-
         let latest_gc_cutoff_lsn = timeline.tline.get_latest_gc_cutoff_lsn();
         let lsn = Self::wait_or_get_last_lsn(timeline, req.lsn, req.latest, &latest_gc_cutoff_lsn)?;
-
         /*
         // Add a 1s delay to some requests. The delayed causes the requests to
         // hit the race condition from github issue #1047 more easily.
@@ -597,11 +584,6 @@ impl PageServerHandler {
         }
         */
         let page = timeline.get_rel_page_at_lsn(req.rel, req.blkno, lsn)?;
-
-        info!(
-            "finished processing the get_page_at_lsn request, took: {}us",
-            timer.elapsed().as_micros()
-        );
 
         Ok(PagestreamBeMessage::GetPage(PagestreamGetPageResponse {
             page,

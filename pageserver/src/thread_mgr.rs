@@ -149,7 +149,6 @@ where
 {
     let (shutdown_tx, shutdown_rx) = watch::channel(());
     let thread_id = NEXT_THREAD_ID.fetch_add(1, Ordering::Relaxed);
-    let span = tracing::info_span!("thread", name=%name, id=%thread_id, kind=?kind);
     let thread = Arc::new(PageServerThread {
         _thread_id: thread_id,
         kind,
@@ -175,7 +174,6 @@ where
     let join_handle = match thread::Builder::new()
         .name(name.to_string())
         .spawn(move || {
-            let _enter = span.entered();
             thread_wrapper(
                 thread_name,
                 thread_id,
