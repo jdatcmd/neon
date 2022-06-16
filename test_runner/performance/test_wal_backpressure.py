@@ -18,7 +18,8 @@ from fixtures.utils import lsn_from_hex
 from performance.test_perf_pgbench import (get_durations_matrix, get_scales_matrix)
 
 
-@pytest.fixture(params=["vanilla", "neon_off", "neon_on"])
+# @pytest.fixture(params=["vanilla", "neon_off", "neon_on"])
+@pytest.fixture(params=["neon_on"])
 # This fixture constructs multiple `PgCompare` interfaces using a builder pattern.
 # The builder parameters are encoded in the fixture's param.
 # For example, to build a `NeonCompare` interface, the corresponding fixture's param should have
