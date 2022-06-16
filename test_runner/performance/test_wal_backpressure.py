@@ -53,11 +53,7 @@ def pg_compare(request) -> PgCompare:
         env.neon_cli.create_branch("empty", ancestor_branch_name=DEFAULT_BRANCH_NAME)
 
         branch_name = request.node.name
-        return NeonCompare(zenbenchmark,
-                           env,
-                           pg_bin,
-                           branch_name,
-                           config_lines=["wal_log_hints=off"])
+        return NeonCompare(zenbenchmark, env, pg_bin, branch_name)
 
 
 def start_heavy_write_workload(env: PgCompare, n_tables: int, scale: int, num_iters: int):
