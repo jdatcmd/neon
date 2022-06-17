@@ -18,8 +18,7 @@ from fixtures.utils import lsn_from_hex
 from performance.test_perf_pgbench import (get_durations_matrix, get_scales_matrix)
 
 
-# @pytest.fixture(params=["vanilla", "neon_off", "neon_on"])
-@pytest.fixture(params=["neon_on"])
+@pytest.fixture(params=["vanilla", "neon_off", "neon_on"])
 # This fixture constructs multiple `PgCompare` interfaces using a builder pattern.
 # The builder parameters are encoded in the fixture's param.
 # For example, to build a `NeonCompare` interface, the corresponding fixture's param should have
@@ -54,11 +53,7 @@ def pg_compare(request) -> PgCompare:
         env.neon_cli.create_branch("empty", ancestor_branch_name=DEFAULT_BRANCH_NAME)
 
         branch_name = request.node.name
-        return NeonCompare(zenbenchmark,
-                           env,
-                           pg_bin,
-                           branch_name,
-                           config_lines=["wal_log_hints=off"])
+        return NeonCompare(zenbenchmark, env, pg_bin, branch_name)
 
 
 def start_heavy_write_workload(env: PgCompare, n_tables: int, scale: int, num_iters: int):
@@ -92,7 +87,6 @@ def start_heavy_write_workload(env: PgCompare, n_tables: int, scale: int, num_it
 @pytest.mark.parametrize("n_tables", [5])
 @pytest.mark.parametrize("scale", get_scales_matrix(5))
 @pytest.mark.parametrize("num_iters", [10])
-@pytest.mark.timeout(600)
 def test_heavy_write_workload(pg_compare: PgCompare, n_tables: int, scale: int, num_iters: int):
     env = pg_compare
 
@@ -169,7 +163,6 @@ def start_pgbench_intensive_initialization(env: PgCompare, scale: int):
 
 
 @pytest.mark.parametrize("scale", get_scales_matrix(1000))
-@pytest.mark.timeout(600)
 def test_pgbench_intensive_init_workload(pg_compare: PgCompare, scale: int):
     env = pg_compare
     with pg_cur(env.pg) as cur:
